@@ -1,10 +1,12 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
-import { invoices, customers } from '@/db/schema';
+import { invoices, customers, estimates } from '@/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { getUserCompanies, getActiveCompanyId } from '@/actions/company.actions';
+import { ESTIMATE_STATUS_COLOR, estimateStatusLabel } from '@/lib/estimates';
 import IngresosChart from '@/components/ingresosChart';
+import DashboardEstimateAction from '@/components/dashboardEstimateAction';
 import Link from 'next/link';
 
 export const dynamic = 'force-dynamic';
@@ -121,6 +123,38 @@ export default async function DashboardPage() {
         diasRestantes,
       };
     });
+
+  // ── Presupuestos por estado ──
+  const allEstimates = await db
+    .select({
+      id: estimates.id,
+      formatted_number: estimates.formatted_number,
+      status: estimates.status as any,
+      total_cents: estimates.total_cents,
+      issued_at: estimates.issued_at,
+      expiry_date: estimates.expiry_date,
+      accept_token: estimates.accept_token as any,
+      client_name: customers.name,
+      client_note: estimates.client_note,
+    })
+    .from(estimates)
+    .leftJoin(customers, eq(estimates.customer_id, customers.id))
+    .where(eq(estimates.company_id, companyId))
+    .orderBy(desc(estimates.issued_at));
+
+  const estimateCounts: Record<string, number> = {};
+  const estimateTotals: Record<string, number> = {};
+  allEstimates.forEach((e) => {
+    const s = e.status || 'Borrador';
+    estimateCounts[s] = (estimateCounts[s] || 0) + 1;
+    estimateTotals[s] = (estimateTotals[s] || 0) + (e.total_cents || 0);
+  });
+
+  const estimateStatuses = ['Borrador', 'Enviado', 'Aceptado', 'Rechazado', 'Modificación solicitada', 'Facturado']
+    .filter((s) => (estimateCounts[s] || 0) > 0);
+
+  // Presupuestos aún no aceptados (Borrador, Enviado, Rechazado, Modificación solicitada)
+  const estimadosPendientes = allEstimates.filter((e) => e.status !== 'Aceptado' && e.status !== 'Facturado');
 
   const metrics = [
     {
@@ -382,6 +416,129 @@ export default async function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Estado de Presupuestos ── */}
+      {allEstimates.length > 0 && (
+        <div style={{
+          backgroundColor: 'var(--card-bg)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '12px',
+          padding: '1.5rem',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          marginTop: '1.25rem',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '1rem' }}>
+            <i className="fas fa-file-invoice" style={{ color: '#0ea5e9', fontSize: '0.9rem' }}></i>
+            <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-color)', margin: 0 }}>
+              Presupuestos
+            </h4>
+            <Link href="/presupuestos" style={{ fontSize: '0.75rem', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600, marginLeft: 'auto' }}>
+              Ver todos &rarr;
+            </Link>
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {estimateStatuses.map((s) => {
+              const color = ESTIMATE_STATUS_COLOR[s] || '#64748b';
+              const count = estimateCounts[s] || 0;
+              const total = (estimateTotals[s] || 0) / 100;
+              return (
+                <div
+                  key={s}
+                  style={{
+                    flex: '1 1 140px',
+                    minWidth: '140px',
+                    padding: '14px 16px',
+                    borderRadius: '10px',
+                    backgroundColor: 'var(--bg-color)',
+                    border: `1px solid var(--border-color)`,
+                    borderLeft: `3px solid ${color}`,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                  }}
+                >
+                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    {estimateStatusLabel(s)}
+                  </span>
+                  <span style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text-color)', lineHeight: 1.1 }}>
+                    {count}
+                  </span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color }}>
+                    {total.toFixed(2)} €
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Pendientes de aceptación: listado accionable */}
+          {estimadosPendientes.length > 0 && (
+            <div style={{ marginTop: '1.25rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '0.75rem' }}>
+                <i className="fas fa-hourglass-half" style={{ color: '#f59e0b', fontSize: '0.85rem' }}></i>
+                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-color)' }}>
+                  Pendientes de aceptación
+                </span>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  ({estimadosPendientes.length})
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {estimadosPendientes.slice(0, 6).map((e) => {
+                  const color = ESTIMATE_STATUS_COLOR[e.status || ''] || '#64748b';
+                  const fecha = e.issued_at
+                    ? new Date(e.issued_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })
+                    : '-';
+                  return (
+                    <div
+                      key={e.id}
+                      style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        padding: '10px 12px', borderRadius: '10px', backgroundColor: 'var(--bg-color)',
+                        border: '1px solid var(--border-color)', gap: '10px', flexWrap: 'wrap',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden', flex: 1, minWidth: '170px' }}>
+                        <span style={{
+                          width: '8px', height: '8px', borderRadius: '50%', backgroundColor: color, flexShrink: 0,
+                        }}></span>
+                        <div style={{ overflow: 'hidden' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <strong style={{ fontSize: '0.8rem', color: 'var(--text-color)', whiteSpace: 'nowrap' }}>
+                              {e.formatted_number}
+                            </strong>
+                            <span style={{
+                              fontSize: '0.62rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                              backgroundColor: `${color}1a`, color, whiteSpace: 'nowrap',
+                            }}>
+                              {estimateStatusLabel(e.status)}
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {e.client_name || 'Cliente sin nombre'} · {fecha}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-color)' }}>
+                          {((e.total_cents || 0) / 100).toFixed(2)} €
+                        </span>
+                        <DashboardEstimateAction
+                          estimateId={e.id}
+                          status={e.status || 'Borrador'}
+                          acceptToken={e.accept_token || null}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

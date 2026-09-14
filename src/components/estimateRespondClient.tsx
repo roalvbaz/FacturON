@@ -61,7 +61,10 @@ export default function EstimateRespond({
     setWorking(true);
     setError(null);
     try {
-      const res = await respondEstimateAction(token, pending as 'ACEPTAR' | 'RECHAZAR' | 'MODIFICAR', note.trim() || undefined);
+      // CONFIRM_ACCEPT es la confirmación visual; la acción real de servidor es ACEPTAR.
+      const action: 'ACEPTAR' | 'RECHAZAR' | 'MODIFICAR' =
+        pending === 'CONFIRM_ACCEPT' ? 'ACEPTAR' : (pending as 'ACEPTAR' | 'RECHAZAR' | 'MODIFICAR');
+      const res = await respondEstimateAction(token, action, note.trim() || undefined);
       if (!res.success) {
         setError(res.error || 'No se pudo procesar la respuesta.');
       } else {

@@ -11,7 +11,7 @@ import {
   sendEstimateAction,
   convertEstimateToInvoiceAction,
 } from '@/actions/estimate.actions';
-import { getEstimateLink } from '@/lib/estimates';
+import { getEstimateLink, isEstimateConvertible } from '@/lib/estimates';
 import { showToast } from '@/lib/utils/toast';
 
 export default function EstimateModalClient({
@@ -44,7 +44,8 @@ export default function EstimateModalClient({
   const [convertError, setConvertError] = useState<string | null>(null);
 
   const status = presupuesto.status || 'Borrador';
-  const isAccepted = status === 'Aceptado';
+  // Conversión posible desde Aceptado (flujo normal) o desde Borrador (facturar directo).
+  const isConvertible = isEstimateConvertible(status);
 
   useEffect(() => setMounted(true), []);
 
@@ -174,7 +175,7 @@ export default function EstimateModalClient({
         </div>
 
         <div className="invoice-modal-actions" style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          {isAccepted && (
+          {isConvertible && (
             <button
               type="button"
               onClick={() => { setShowConvert(true); setConvertError(null); }}
@@ -384,7 +385,7 @@ export default function EstimateModalClient({
         >
           <i className="fas fa-eye"></i>
         </button>
-        {companyId && isAccepted && (
+        {companyId && isConvertible && (
           <button
             type="button"
             onClick={openModal}

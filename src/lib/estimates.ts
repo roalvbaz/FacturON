@@ -20,8 +20,20 @@ export const ESTIMATE_EDITABLE: EstimateStatus[] = [
   ESTIMATE_STATUS.MODIFICACION_SOLICITADA,
 ];
 
-/** El único estado desde el que se puede convertir el presupuesto en factura. */
-export const ESTIMATE_CONVERTIBLE = ESTIMATE_STATUS.ACEPTADO;
+/**
+ * Estados desde los que se puede convertir el presupuesto en factura.
+ * - Aceptado: flujo normal (cliente dio el OK).
+ * - Borrador: permite facturar directamente sin pasar por el enlace público.
+ */
+export const ESTIMATE_CONVERTIBLE: EstimateStatus[] = [
+  ESTIMATE_STATUS.ACEPTADO,
+  ESTIMATE_STATUS.BORRADOR,
+];
+
+/** ¿El presupuesto se puede convertir a factura (Aceptado o Borrador)? */
+export function isEstimateConvertible(status?: string | null): boolean {
+  return Boolean(status && ESTIMATE_CONVERTIBLE.includes(status as EstimateStatus));
+}
 
 export function hashEstimateToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');

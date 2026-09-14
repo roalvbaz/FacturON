@@ -563,7 +563,7 @@ export default function EstimateForm({ mode, estimateId }: { mode: 'new' | 'edit
                       <option value="21">General (21%)</option>
                       <option value="10">Reducido (10%)</option>
                       <option value="4">Superreducido (4%)</option>
-                      <option value="0">Exento (0%)</option>
+                      <option value="0">IVA general de la factura</option>
                     </select>
                   </div>
                   <div data-label="Total" style={{ textAlign: 'right', fontWeight: 700, fontSize: '0.85rem', paddingRight: '4px', color: 'var(--text-color)' }}>

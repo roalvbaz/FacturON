@@ -178,6 +178,9 @@ export default function Sidebar({
         <Link href="/nuevoPresupuesto" style={linkStyle(isActive('/nuevoPresupuesto'))}>
           <i className="fas fa-file-signature" style={{ width: '20px', textAlign: 'center', fontSize: '0.9rem' }}></i> Nuevo Presupuesto
         </Link>
+        <Link href="/presupuestos" style={linkStyle(isActive('/presupuestos'))}>
+          <i className="fas fa-file-invoice-dollar" style={{ width: '20px', textAlign: 'center', fontSize: '0.9rem' }}></i> Presupuestos
+        </Link>
         <Link href="/historial" style={linkStyle(isActive('/historial'))}>
           <i className="fas fa-list" style={{ width: '20px', textAlign: 'center', fontSize: '0.9rem' }}></i> Historial
         </Link>

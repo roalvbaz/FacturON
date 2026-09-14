@@ -220,7 +220,17 @@ function InvoicePdf({ factura, empresa, settings }: { factura: any; empresa: any
 
   return (
     <Document>
-      <Page size="A4" style={{ ...styles.page, fontFamily: pdfFont }}>
+      <Page
+        size="A4"
+        style={{
+          ...styles.page,
+          fontFamily: pdfFont,
+          flexDirection: 'column',
+          justifyContent: 'space-between', // ancla los totales + pie al final de la página
+        }}
+      >
+        {/* SECCIÓN SUPERIOR: cabecera, cliente y conceptos */}
+        <View>
         {/* Cabecera */}
         <View style={{ ...styles.header, backgroundColor: primaryColor }}>
           {showTopStripe && <View style={stripe} />}
@@ -344,6 +354,10 @@ function InvoicePdf({ factura, empresa, settings }: { factura: any; empresa: any
           )}
         </View>
 
+        </View>
+
+        {/* SECCIÓN INFERIOR: totales + pie anclados al fondo */}
+        <View>
         {/* Totales */}
         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 14 }}>
           <View style={{ width: '42%' }}>
@@ -444,6 +458,7 @@ function InvoicePdf({ factura, empresa, settings }: { factura: any; empresa: any
             )}
           </View>
         )}
+        </View>
       </Page>
     </Document>
   );

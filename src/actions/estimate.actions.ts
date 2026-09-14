@@ -15,6 +15,7 @@ import {
   getEstimateLink,
   ESTIMATE_STATUS,
   isEstimateEditable,
+  isEstimateConvertible,
 } from '@/lib/estimates';
 import crypto from 'crypto';
 
@@ -236,6 +237,8 @@ export async function createEstimateAction(payload: {
     });
 
     revalidatePath('/historial');
+    revalidatePath('/presupuestos');
+    revalidatePath('/dashboard');
     revalidatePath('/nuevoPresupuesto');
 
     return { success: true, estimateId: estimate.id, formattedNumber: estimate.formatted_number };
@@ -304,6 +307,8 @@ export async function updateEstimateAction(
     });
 
     revalidatePath('/historial');
+    revalidatePath('/presupuestos');
+    revalidatePath('/dashboard');
     revalidatePath('/nuevoPresupuesto');
 
     return { success: true, estimateId, formattedNumber: estimate.formatted_number };
@@ -374,6 +379,8 @@ export async function sendEstimateAction(estimateId: string) {
     });
 
     revalidatePath('/historial');
+    revalidatePath('/presupuestos');
+    revalidatePath('/dashboard');
     revalidatePath('/nuevoPresupuesto');
 
     return { success: true, acceptLink, emailedTo: customer.email };
@@ -518,18 +525,27 @@ export async function respondEstimateAction(
       );
     }
 
+    // Normaliza la acción. CONFIRM_ACCEPT es un artefacto de UX del cliente
+    // (la confirmación visual de "Aceptar"); builds antiguos la enviaban tal cual
+    // y el else de abajo la guardaba como "Modificación solicitada". Al normalizar
+    // aquí, el servidor queda a salvo aunque el cliente sea una versión antigua.
+    const action = response === 'CONFIRM_ACCEPT' ? 'ACEPTAR' : response;
+    if (!['ACEPTAR', 'RECHAZAR', 'MODIFICAR'].includes(action)) {
+      throw new Error('Respuesta no válida.');
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const isExpired = estimate.expiry_date ? new Date(estimate.expiry_date).getTime() < today.getTime() : false;
 
-    if (response === 'ACEPTAR' && isExpired) {
+    if (action === 'ACEPTAR' && isExpired) {
       throw new Error('Este presupuesto ha caducado. Solicita una prórroga o una nueva versión.');
     }
-    if (response === 'MODIFICAR' && !note?.trim()) {
+    if (action === 'MODIFICAR' && !note?.trim()) {
       throw new Error('Indica qué cambios necesitas para solicitar la modificación.');
     }
 
-    if (response === 'ACEPTAR') {
+    if (action === 'ACEPTAR') {
       await db
         .update(estimates)
         .set({
@@ -538,7 +554,7 @@ export async function respondEstimateAction(
           client_note: null,
         })
         .where(eq(estimates.id, estimate.id));
-    } else if (response === 'RECHAZAR') {
+    } else if (action === 'RECHAZAR') {
       await db
         .update(estimates)
         .set({ status: ESTIMATE_STATUS.RECHAZADO, client_note: note?.trim() || null })
@@ -551,24 +567,27 @@ export async function respondEstimateAction(
     }
 
     const eventCode =
-      response === 'ACEPTAR' ? 'ESTIMATE_ACCEPTED'
-      : response === 'RECHAZAR' ? 'ESTIMATE_REJECTED'
+      action === 'ACEPTAR' ? 'ESTIMATE_ACCEPTED'
+      : action === 'RECHAZAR' ? 'ESTIMATE_REJECTED'
       : 'ESTIMATE_MODIFICATION_REQUESTED';
 
     await logAuditEvent({
       eventCode: eventCode as any,
       description:
-        response === 'ACEPTAR'
+        action === 'ACEPTAR'
           ? `El cliente aceptó el presupuesto ${estimate.formatted_number}`
-          : response === 'RECHAZAR'
+          : action === 'RECHAZAR'
             ? `El cliente rechazó el presupuesto ${estimate.formatted_number}${note?.trim() ? ` (motivo: ${note.trim()})` : ''}`
             : `El cliente solicitó una modificación del presupuesto ${estimate.formatted_number} (${note?.trim()})`,
       companyId: estimate.company_id,
       userId: null,
-      metadata: { estimateId: estimate.id, response },
+      metadata: { estimateId: estimate.id, response: action },
     });
 
     revalidatePath(`/presupuesto/${token}`);
+    revalidatePath('/presupuestos');
+    revalidatePath('/dashboard');
+    revalidatePath('/historial');
 
     return { success: true, status: response === 'ACEPTAR' ? 'Aceptado' : response === 'RECHAZAR' ? 'Rechazado' : 'Modificación solicitada' };
   } catch (error: any) {
@@ -592,7 +611,7 @@ export async function getEstimateByTokenAction(token: string) {
       return { success: false, error: 'Presupuesto no encontrado. El enlace puede haber sido renovado por el emisor.' };
     }
 
-    const [customer, company] = await Promise.all([
+    const [customer, company, companySettings] = await Promise.all([
       estimate.customer_id
         ? db
             .select()
@@ -605,6 +624,12 @@ export async function getEstimateByTokenAction(token: string) {
         .select()
         .from(companies)
         .where(eq(companies.id, estimate.company_id))
+        .limit(1)
+        .then((r) => r[0] ?? null),
+      db
+        .select()
+        .from(company_settings)
+        .where(eq(company_settings.company_id, estimate.company_id))
         .limit(1)
         .then((r) => r[0] ?? null),
     ]);
@@ -641,6 +666,9 @@ export async function getEstimateByTokenAction(token: string) {
       company: company
         ? { name: company.name, tax_id: company.tax_id, address: company.address, city: company.city, postal_code: company.postal_code }
         : null,
+      settings: companySettings
+        ? { template_id: companySettings.template_id, theme_color: companySettings.theme_color, logo_url: companySettings.logo_url, font_family: companySettings.font_family }
+        : null,
       lines: lines.map((l) => ({
         id: l.id,
         description: l.description,
@@ -657,7 +685,7 @@ export async function getEstimateByTokenAction(token: string) {
 }
 
 // ============================================================
-// CONVERTIR A FACTURA (requiere certificado AEAT)
+// CONVERTIR A FACTURA (AEAT opcional: solo si hay certificado)
 // ============================================================
 
 export async function convertEstimateToInvoiceAction(
@@ -671,24 +699,17 @@ export async function convertEstimateToInvoiceAction(
 
     const { estimate, customer, company, settings, lines } = await loadOwnedEstimate(estimateId);
 
-    if (estimate.status !== ESTIMATE_STATUS.ACEPTADO) {
-      throw new Error('Solo puedes convertir a factura un presupuesto Aceptado.');
+    if (!isEstimateConvertible(estimate.status)) {
+      throw new Error('Solo puedes convertir a factura un presupuesto Aceptado o en Borrador.');
     }
     if (!customer?.tax_id) {
       throw new Error('El cliente no tiene NIF/CIF. Edita el presupuesto antes de convertir.');
     }
 
-    // ── Requisito AEAT obligatorio: certificado subido y en vigor ──
-    const hasPfx = Boolean(settings?.aeat_pfx_data);
-    const certValidTo = settings?.aeat_cert_valid_to ? new Date(settings.aeat_cert_valid_to) : null;
-    const certExpired = certValidTo ? new Date() > certValidTo : false;
-    if (!hasPfx || certExpired) {
-      return {
-        success: false,
-        error: 'Para convertir el presupuesto en factura necesitas subir tu certificado Veri*factu (Configuración → Certificado digital).',
-        requiresCertificate: true,
-      };
-    }
+    // No exigimos certificado AEAT para convertir: la AEAT se encola solo si
+    // la empresa ha subido uno (ver emitInvoiceAction). Mientras no se envíe
+    // nada a la AEAT, se puede facturar sin certificado.
+    void settings;
 
     // Reutilizamos emitInvoiceAction al 100%: numeración F, cadena de hashes,
     // cola AEAT y email con PDF. Solo le pasamos los datos del presupuesto.
@@ -729,6 +750,8 @@ export async function convertEstimateToInvoiceAction(
     });
 
     revalidatePath('/historial');
+    revalidatePath('/presupuestos');
+    revalidatePath('/dashboard');
     revalidatePath('/nuevoPresupuesto');
 
     return {

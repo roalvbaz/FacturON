@@ -1,12 +1,11 @@
 import { db } from '@/db';
-import { invoices, invoice_lines, customers, company_settings, verifactu_submissions, estimates } from '@/db/schema';
+import { invoices, invoice_lines, customers, company_settings, verifactu_submissions } from '@/db/schema';
 import { eq, desc, and, ilike, gte, lte, or, inArray } from 'drizzle-orm';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { getUserCompanies, getActiveCompanyId } from '@/actions/company.actions';
 import InvoicesTableClient from '@/components/invoiceTableClient';
-import EstimateTableClient from '@/components/estimateTableClient';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -142,33 +141,6 @@ export default async function HistorialPage({
 
   const templateId = settings?.template_id || 'clasico-tradicional';
 
-  // Presupuestos de la empresa activa (envío de enlace + tramitación de la factura).
-  const listaPresupuestos = await db
-    .select({
-      id: estimates.id,
-      company_id: estimates.company_id,
-      customer_id: estimates.customer_id,
-      formatted_number: estimates.formatted_number,
-      issued_at: estimates.issued_at,
-      expiry_date: estimates.expiry_date,
-      status: estimates.status as any,
-      converted_invoice_id: estimates.converted_invoice_id as any,
-      accept_token: estimates.accept_token as any,
-      subtotal_cents: estimates.subtotal_cents,
-      vat_total_cents: estimates.vat_total_cents,
-      total_cents: estimates.total_cents,
-      notes: estimates.notes,
-      client_note: estimates.client_note,
-      client_name: customers.name,
-      client_tax_id: customers.tax_id,
-      client_email: customers.email,
-      client_address: customers.address,
-    })
-    .from(estimates)
-    .leftJoin(customers, eq(estimates.customer_id, customers.id))
-    .where(eq(estimates.company_id, activeCompanyId))
-    .orderBy(desc(estimates.issued_at));
-
   const todasLasLineas = await db.select().from(invoice_lines);
 
   const facturasConLineas = listaFacturas.map((f) => ({
@@ -192,7 +164,7 @@ export default async function HistorialPage({
             Historial - {miEmpresa.name}
           </h2>
           <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            Tramita tus presupuestos aceptados en factura y consulta, filtra y exporta tus facturas ordinarias y rectificativas.
+            Consulta, filtra y exporta tus facturas ordinarias y rectificativas. Los presupuestos tienen su propia página.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -217,9 +189,8 @@ export default async function HistorialPage({
             <span>Exportar CSV/Excel</span>
           </a>
 
-          <Link href="/nuevoPresupuesto" className="btn btn-primary" style={{ textDecoration: 'none', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-            <i className="fas fa-plus"></i>
-            <span>Nuevo Presupuesto</span>
+          <Link href="/presupuestos" style={{ fontSize: '0.78rem', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <i className="fas fa-file-invoice-dollar"></i> Ver Presupuestos
           </Link>
         </div>
       </div>
@@ -316,37 +287,6 @@ export default async function HistorialPage({
             </Link>
           </div>
         </form>
-      </div>
-
-      {/* SECCIÓN: PRESUPUESTOS (envío del enlace + tramitación de la factura) */}
-      <div className="card" style={{ padding: 0, overflow: 'visible', marginBottom: '1.5rem' }}>
-        <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-color)' }}>
-              Presupuestos · envío y tramitación
-            </h3>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Envía el enlace al cliente; cuando lo acepte, pulsa <strong>Tramitar Factura</strong> y envía después la factura final por email.
-            </span>
-          </div>
-          <Link href="/nuevoPresupuesto" className="btn btn-primary" style={{ textDecoration: 'none', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>
-            <i className="fas fa-plus"></i> Nuevo Presupuesto
-          </Link>
-        </div>
-        {listaPresupuestos.length === 0 ? (
-          <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-            <i className="fas fa-file-invoice-dollar" style={{ fontSize: '2rem', marginBottom: '0.75rem', opacity: 0.5 }}></i>
-            <p style={{ margin: 0 }}>Todavía no has creado ningún presupuesto.</p>
-          </div>
-        ) : (
-          <EstimateTableClient
-            presupuestos={listaPresupuestos}
-            empresa={empresa}
-            settings={settings}
-            templateId={templateId}
-            companyId={activeCompanyId}
-          />
-        )}
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'visible' }}>
