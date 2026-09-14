@@ -501,7 +501,7 @@ export async function getEstimatePdfBase64Action(estimateId: string) {
 
 export async function respondEstimateAction(
   token: string,
-  response: 'ACEPTAR' | 'RECHAZAR' | 'MODIFICAR',
+  response: 'ACEPTAR' | 'RECHAZAR' | 'MODIFICAR' | 'CONFIRM_ACCEPT',
   note?: string
 ) {
   try {

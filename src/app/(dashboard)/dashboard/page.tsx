@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
-import { invoices, customers, estimates } from '@/db/schema';
+import { invoices, customers, estimates, expenses } from '@/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { getUserCompanies, getActiveCompanyId } from '@/actions/company.actions';
 import { ESTIMATE_STATUS_COLOR, estimateStatusLabel } from '@/lib/estimates';
@@ -134,6 +134,7 @@ export default async function DashboardPage() {
       issued_at: estimates.issued_at,
       expiry_date: estimates.expiry_date,
       accept_token: estimates.accept_token as any,
+      converted_invoice_id: estimates.converted_invoice_id as any,
       client_name: customers.name,
       client_note: estimates.client_note,
     })
@@ -155,6 +156,61 @@ export default async function DashboardPage() {
 
   // Presupuestos aún no aceptados (Borrador, Enviado, Rechazado, Modificación solicitada)
   const estimadosPendientes = allEstimates.filter((e) => e.status !== 'Aceptado' && e.status !== 'Facturado');
+
+  // ── Gastos ──
+  const gastos = await db
+    .select({
+      id: expenses.id,
+      supplier_name: expenses.supplier_name,
+      category: expenses.category,
+      expense_date: expenses.expense_date,
+      total_cents: expenses.total_cents,
+      status: expenses.status as any,
+    })
+    .from(expenses)
+    .where(eq(expenses.company_id, companyId))
+    .orderBy(desc(expenses.expense_date));
+
+  let gastosMesCents = 0;
+  gastos.forEach((g) => {
+    if (g.expense_date) {
+      const d = new Date(g.expense_date);
+      if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
+        gastosMesCents += g.total_cents || 0;
+      }
+    }
+  });
+  // ── Facturas vencidas (no pagadas y con fecha de vencimiento pasada) ──
+  let numVencidas = 0;
+  let vencidasCents = 0;
+  facturas.forEach((f) => {
+    if (f.status === 'Pagada') return;
+    const due = f.due_date
+      ? new Date(f.due_date)
+      : new Date(new Date(f.issued_at || now).getTime() + 30 * 24 * 60 * 60 * 1000);
+    if (due.getTime() < now.getTime()) {
+      numVencidas += 1;
+      vencidasCents += f.total_cents || 0;
+    }
+  });
+
+  // ── Presupuestos aceptados aún por facturar ──
+  const porFacturarEstimates = allEstimates.filter((e) => e.status === 'Aceptado' && !e.converted_invoice_id);
+  const porFacturarCents = porFacturarEstimates.reduce((sum, e) => sum + (e.total_cents || 0), 0);
+
+  // ── Top clientes por importe facturado ──
+  const clientTotals = new Map<string, { name: string; totalEuros: number; count: number }>();
+  facturas.forEach((f) => {
+    const name = f.customer_name || 'Cliente';
+    const cur = clientTotals.get(name) || { name, totalEuros: 0, count: 0 };
+    cur.totalEuros += (f.total_cents || 0) / 100;
+    cur.count += 1;
+    clientTotals.set(name, cur);
+  });
+  const topClientes = Array.from(clientTotals.values())
+    .sort((a, b) => b.totalEuros - a.totalEuros)
+    .slice(0, 5);
+  const maxClienteEuros = topClientes[0]?.totalEuros || 1;
 
   const metrics = [
     {
@@ -182,10 +238,20 @@ export default async function DashboardPage() {
       borderColor: '#0ea5e9',
     },
     {
-      label: 'Total Facturas',
-      value: String(facturas.length),
-      icon: 'fa-file-invoice',
-      iconBg: 'rgba(139,92,246,0.12)',
+      label: 'Vencidas',
+      value: numVencidas > 0 ? String(numVencidas) : '0',
+      subtitle: `${(vencidasCents / 100).toFixed(2)} € sin cobrar`,
+      icon: 'fa-exclamation-triangle',
+      iconBg: 'rgba(239,68,68,0.12)',
+      iconColor: '#ef4444',
+      borderColor: '#ef4444',
+    },
+    {
+      label: 'Por Facturar',
+      value: `${(porFacturarCents / 100).toFixed(2)} €`,
+      subtitle: `${porFacturarEstimates.length} presupuesto${porFacturarEstimates.length === 1 ? '' : 's'} aceptado${porFacturarEstimates.length === 1 ? '' : 's'}`,
+      icon: 'fa-file-invoice-dollar',
+      iconBg: 'rgba(245,158,11,0.12)',
       iconColor: '#8b5cf6',
       borderColor: '#8b5cf6',
     },
@@ -266,6 +332,11 @@ export default async function DashboardPage() {
               <h3 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-color)', margin: 0, lineHeight: '1.2' }}>
                 {m.value}
               </h3>
+              {'subtitle' in m && m.subtitle ? (
+                <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', margin: '2px 0 0 0', fontWeight: 500 }}>
+                  {m.subtitle}
+                </p>
+              ) : null}
             </div>
           </div>
         ))}
@@ -414,6 +485,159 @@ export default async function DashboardPage() {
               </div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Gastos recientes + Top Clientes */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1.25rem', marginTop: '1.25rem' }}>
+        {/* Gastos recientes */}
+        <div style={{
+          backgroundColor: 'var(--card-bg)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '12px',
+          padding: '1.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <i className="fas fa-file-contract" style={{ color: '#f59e0b', fontSize: '0.9rem' }}></i>
+              <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-color)', margin: 0 }}>
+                Aceptados por facturar
+              </h4>
+            </div>
+            <Link href="/presupuestos?estado=Aceptado" style={{ fontSize: '0.75rem', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600 }}>
+              Ver todos &rarr;
+            </Link>
+          </div>
+
+          {porFacturarEstimates.length === 0 ? (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '1.5rem' }}>
+              <div>
+                <i className="fas fa-check-circle" style={{ fontSize: '2rem', color: '#10b981', opacity: 0.4, marginBottom: '8px', display: 'block' }}></i>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>
+                  Nada por facturar. ¡Todo al día!
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1 }}>
+              {porFacturarEstimates.slice(0, 5).map((e) => {
+                const fecha = e.issued_at
+                  ? new Date(e.issued_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })
+                  : '-';
+                return (
+                  <div
+                    key={e.id}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '10px 12px', borderRadius: '10px', backgroundColor: 'var(--bg-color)',
+                      border: '1px solid var(--border-color)', gap: '10px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden', flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        width: '34px', height: '34px', borderRadius: '9px', flexShrink: 0,
+                        backgroundColor: 'rgba(245,158,11,0.12)', color: '#f59e0b',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        <i className="fas fa-file-invoice-dollar"></i>
+                      </div>
+                      <div style={{ overflow: 'hidden' }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-color)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {e.formatted_number}
+                        </div>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                          {e.client_name || 'Cliente sin nombre'} · {fecha}
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#f59e0b' }}>
+                        {((e.total_cents || 0) / 100).toFixed(2)} €
+                      </span>
+                      <div>
+                        <Link href="/presupuestos?estado=Aceptado" style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--primary)', textDecoration: 'none' }}>
+                          Tramitar &rarr;
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Top Clientes */}
+        <div style={{
+          backgroundColor: 'var(--card-bg)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '12px',
+          padding: '1.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <i className="fas fa-trophy" style={{ color: '#f59e0b', fontSize: '0.9rem' }}></i>
+              <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-color)', margin: 0 }}>
+                Top Clientes
+              </h4>
+            </div>
+            <Link href="/clientes" style={{ fontSize: '0.75rem', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600 }}>
+              Ver todos &rarr;
+            </Link>
+          </div>
+
+          {topClientes.length === 0 ? (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '1.5rem' }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>
+                Aún no hay clientes con facturas.
+              </p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1 }}>
+              {topClientes.map((c, i) => (
+                <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{
+                    width: '22px', height: '22px', borderRadius: '7px', flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '0.68rem', fontWeight: 800,
+                    backgroundColor: i === 0 ? '#f59e0b' : 'var(--bg-color)',
+                    color: i === 0 ? '#ffffff' : 'var(--text-muted)',
+                    border: i === 0 ? 'none' : '1px solid var(--border-color)',
+                  }}>
+                    {i + 1}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-color)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {c.name}
+                      </span>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--text-color)', flexShrink: 0, marginLeft: '8px' }}>
+                        {c.totalEuros.toFixed(2)} €
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ flex: 1, height: '5px', borderRadius: '999px', backgroundColor: 'var(--bg-color)', overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${Math.max(8, (c.totalEuros / maxClienteEuros) * 100)}%`,
+                          height: '100%', borderRadius: '999px',
+                          background: 'linear-gradient(90deg, #0ea5e9, #38bdf8)',
+                        }}></div>
+                      </div>
+                      <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)', flexShrink: 0 }}>
+                        {c.count} fact.{c.count === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 import { db } from '@/db';
 import { estimates, customers, company_settings } from '@/db/schema';
-import { eq, desc, ilike, or, inArray } from 'drizzle-orm';
+import { eq, desc, ilike, or, inArray, and, gte, lte } from 'drizzle-orm';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
@@ -17,7 +17,7 @@ const ESTIMATE_STATUSES = ['Borrador', 'Enviado', 'Aceptado', 'Rechazado', 'Modi
 export default async function PresupuestosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; estado?: string }>;
+  searchParams: Promise<{ q?: string; estado?: string; from?: string; to?: string }>;
 }) {
   const resolvedSearchParams = await searchParams;
 
@@ -38,6 +38,8 @@ export default async function PresupuestosPage({
 
   const busqueda = resolvedSearchParams.q || '';
   const estadoFiltro = resolvedSearchParams.estado || 'Todos';
+  const fechaDesde = resolvedSearchParams.from || '';
+  const fechaHasta = resolvedSearchParams.to || '';
 
   const [settings] = await db
     .select()
@@ -60,6 +62,15 @@ export default async function PresupuestosPage({
 
   if (estadoFiltro !== 'Todos') {
     conditions.push(eq(estimates.status as any, estadoFiltro));
+  }
+
+  if (fechaDesde) {
+    const fromDate = new Date(`${fechaDesde}T00:00:00`);
+    conditions.push(gte(estimates.issued_at, fromDate));
+  }
+  if (fechaHasta) {
+    const toDate = new Date(`${fechaHasta}T23:59:59.999`);
+    conditions.push(lte(estimates.issued_at, toDate));
   }
 
   const listaPresupuestos = await db
@@ -85,7 +96,7 @@ export default async function PresupuestosPage({
     })
     .from(estimates)
     .leftJoin(customers, eq(estimates.customer_id, customers.id))
-    .where(...conditions)
+    .where(and(...conditions))
     .orderBy(desc(estimates.issued_at));
 
   const empresa = {
@@ -150,6 +161,32 @@ export default async function PresupuestosPage({
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+              Fecha Desde
+            </label>
+            <input
+              type="date"
+              name="from"
+              defaultValue={fechaDesde}
+              className="form-control"
+              style={{ height: '45px', fontSize: '0.85rem' }}
+            />
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+              Fecha Hasta
+            </label>
+            <input
+              type="date"
+              name="to"
+              defaultValue={fechaHasta}
+              className="form-control"
+              style={{ height: '45px', fontSize: '0.85rem' }}
+            />
           </div>
 
           <div style={{ display: 'flex', gap: '10px' }}>
